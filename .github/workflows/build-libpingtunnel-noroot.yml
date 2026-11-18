@@ -1,0 +1,98 @@
+name: Build libpingtunnel (no-root / Android ICMP datagram)
+
+# Builds libpingtunnel.so for Android with GOOS=android, which makes the Go
+# build-tag selector in esrrhs/pingtunnel pick icmp_listen_android.go
+# (unprivileged icmp.ListenPacket("udp4", ...)) instead of icmp_listen_other.go
+# (raw ICMP socket, needs root/CAP_NET_RAW). No code patch needed -- GOOS alone
+# decides which file compiles in. Pure Go, CGO_ENABLED=0, no NDK required.
+#
+# Run it from the Actions tab (workflow_dispatch), then download the
+# "libpingtunnel-noroot" artifact zip and drop the two .so files into:
+#   app/src/main/jniLibs/arm64-v8a/libpingtunnel.so
+#   app/src/main/jniLibs/armeabi-v7a/libpingtunnel.so
+# (overwriting the old ones), then rebuild the APK as usual.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pingtunnel_ref:
+        description: "esrrhs/pingtunnel git ref to build (branch, tag, or commit)"
+        required: false
+        default: "master"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - abi: arm64-v8a
+            goarch: arm64
+            goarm: ""
+          - abi: armeabi-v7a
+            goarch: arm
+            goarm: "7"
+    steps:
+      - name: Checkout upstream pingtunnel
+        uses: actions/checkout@v4
+        with:
+          repository: esrrhs/pingtunnel
+          ref: ${{ github.event.inputs.pingtunnel_ref }}
+          path: pingtunnel
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Sanity-check: android build file is present
+        working-directory: pingtunnel
+        run: |
+          test -f icmp_listen_android.go
+          echo "Found icmp_listen_android.go -- GOOS=android will select this file automatically."
+
+      - name: Download Go module deps
+        working-directory: pingtunnel
+        run: go mod download
+
+      - name: Build libpingtunnel.so (android/${{ matrix.goarch }})
+        working-directory: pingtunnel
+        env:
+          CGO_ENABLED: 0
+          GOOS: android
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          mkdir -p ../out/${{ matrix.abi }}
+          go build -v -trimpath -ldflags="-s -w" \
+            -o ../out/${{ matrix.abi }}/libpingtunnel.so \
+            ./cmd
+
+      - name: Confirm it's an Android/ARM binary, not Linux
+        run: file out/${{ matrix.abi }}/libpingtunnel.so
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libpingtunnel-noroot-${{ matrix.abi }}
+          path: out/${{ matrix.abi }}/libpingtunnel.so
+          if-no-files-found: error
+
+  bundle:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all ABI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded
+      - name: Lay out as jniLibs/<abi>/libpingtunnel.so
+        run: |
+          mkdir -p bundle/arm64-v8a bundle/armeabi-v7a
+          cp downloaded/libpingtunnel-noroot-arm64-v8a/libpingtunnel.so bundle/arm64-v8a/libpingtunnel.so
+          cp downloaded/libpingtunnel-noroot-armeabi-v7a/libpingtunnel.so bundle/armeabi-v7a/libpingtunnel.so
+      - name: Upload combined bundle (ready to drop into jniLibs)
+        uses: actions/upload-artifact@v4
+        with:
+          name: libpingtunnel-noroot
+          path: bundle/**
