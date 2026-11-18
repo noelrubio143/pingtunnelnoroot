@@ -45,7 +45,7 @@ jobs:
         with:
           go-version: "1.23"
 
-      - name: Sanity-check: android build file is present
+      - name: "Sanity check: android build file is present"
         working-directory: pingtunnel
         run: |
           test -f icmp_listen_android.go
@@ -55,7 +55,7 @@ jobs:
         working-directory: pingtunnel
         run: go mod download
 
-      - name: Build libpingtunnel.so (android/${{ matrix.goarch }})
+      - name: Build libpingtunnel.so
         working-directory: pingtunnel
         env:
           CGO_ENABLED: 0
@@ -68,7 +68,7 @@ jobs:
             -o ../out/${{ matrix.abi }}/libpingtunnel.so \
             ./cmd
 
-      - name: Confirm it's an Android/ARM binary, not Linux
+      - name: "Confirm binary type: expect Android, not Linux"
         run: file out/${{ matrix.abi }}/libpingtunnel.so
 
       - name: Upload artifact
@@ -86,12 +86,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: downloaded
-      - name: Lay out as jniLibs/<abi>/libpingtunnel.so
+      - name: Lay out as jniLibs per ABI
         run: |
           mkdir -p bundle/arm64-v8a bundle/armeabi-v7a
           cp downloaded/libpingtunnel-noroot-arm64-v8a/libpingtunnel.so bundle/arm64-v8a/libpingtunnel.so
           cp downloaded/libpingtunnel-noroot-armeabi-v7a/libpingtunnel.so bundle/armeabi-v7a/libpingtunnel.so
-      - name: Upload combined bundle (ready to drop into jniLibs)
+      - name: Upload combined bundle
         uses: actions/upload-artifact@v4
         with:
           name: libpingtunnel-noroot
