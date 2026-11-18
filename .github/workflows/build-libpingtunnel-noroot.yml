@@ -3,11 +3,16 @@ name: Build libpingtunnel (no-root / Android ICMP datagram)
 # Builds libpingtunnel.so for Android with GOOS=android, which makes the Go
 # build-tag selector in esrrhs/pingtunnel pick icmp_listen_android.go
 # (unprivileged icmp.ListenPacket("udp4", ...)) instead of icmp_listen_other.go
-# (raw ICMP socket, needs root/CAP_NET_RAW). No code patch needed -- GOOS alone
-# decides which file compiles in. Pure Go, CGO_ENABLED=0, no NDK required.
+# (raw ICMP socket, needs root/CAP_NET_RAW). No source patch needed -- GOOS
+# alone decides which file compiles in.
 #
-# Run it from the Actions tab (workflow_dispatch), then download the
-# "libpingtunnel-noroot" artifact zip and drop the two .so files into:
+# android/arm64 links fine with the pure-Go internal linker (CGO_ENABLED=0).
+# android/arm (32-bit, armeabi-v7a) requires EXTERNAL linking, so that one
+# needs cgo + a real C cross-compiler -> we pull the Android NDK and point
+# CC at its clang for that architecture only.
+#
+# Run from the Actions tab (workflow_dispatch), then download the
+# "libpingtunnel-noroot" artifact and drop the two .so files into:
 #   app/src/main/jniLibs/arm64-v8a/libpingtunnel.so
 #   app/src/main/jniLibs/armeabi-v7a/libpingtunnel.so
 # (overwriting the old ones), then rebuild the APK as usual.
@@ -29,9 +34,13 @@ jobs:
           - abi: arm64-v8a
             goarch: arm64
             goarm: ""
+            cgo: "0"
+            clang_target: ""
           - abi: armeabi-v7a
             goarch: arm
             goarm: "7"
+            cgo: "1"
+            clang_target: armv7a-linux-androideabi21-clang
     steps:
       - name: Checkout upstream pingtunnel
         uses: actions/checkout@v4
@@ -45,6 +54,14 @@ jobs:
         with:
           go-version: "1.23"
 
+      - name: Set up Android NDK
+        if: matrix.cgo == '1'
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+          local-cache: true
+
       - name: "Sanity check: android build file is present"
         working-directory: pingtunnel
         run: |
@@ -55,13 +72,28 @@ jobs:
         working-directory: pingtunnel
         run: go mod download
 
-      - name: Build libpingtunnel.so
+      - name: Build libpingtunnel.so (CGO disabled, arm64 only)
+        if: matrix.cgo == '0'
         working-directory: pingtunnel
         env:
           CGO_ENABLED: 0
           GOOS: android
           GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p ../out/${{ matrix.abi }}
+          go build -v -trimpath -ldflags="-s -w" \
+            -o ../out/${{ matrix.abi }}/libpingtunnel.so \
+            ./cmd
+
+      - name: Build libpingtunnel.so (CGO + NDK clang, armeabi-v7a only)
+        if: matrix.cgo == '1'
+        working-directory: pingtunnel
+        env:
+          CGO_ENABLED: 1
+          GOOS: android
+          GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
+          CC: ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.clang_target }}
         run: |
           mkdir -p ../out/${{ matrix.abi }}
           go build -v -trimpath -ldflags="-s -w" \
